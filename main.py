@@ -9,8 +9,9 @@ import functools
 from util.async_timer import async_timed
 import requests
 import logging
+import json
 
-#_______________________Logging______________________
+# _______________________Logging______________________
 
 
 # получение пользовательского логгера и установка уровня логирования
@@ -28,7 +29,7 @@ py_logger.addHandler(py_handler)
 
 py_logger.info(f"Testing the custom logger for module {__name__}...")
 
-#___________________________________________________
+# ___________________________________________________
 
 
 URL_CAPTCHA = 'https://check.gibdd.ru/captcha'
@@ -42,17 +43,8 @@ user_agent = ua.chrome
 
 # setting headers
 HEADERS = {
-    "User-Agent": user_agent,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Cache-Control": "max-age=0",
+    "User-Agent": 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Mobile Safari/537.36',
+    "Accept": "application/json"
 }
 
 py_logger.info(f"Открываем файл источник где автомобили")
@@ -69,10 +61,11 @@ async def captcha_func(gosnomer):
     solver.set_soft_id(0)
     loop = asyncio.get_event_loop()
     py_logger.info(f"Пробуем получить решение капчи через функцию catpcha_func() для {gosnomer}")
-    captcha_text = await loop.run_in_executor(
+    future = loop.run_in_executor(
         None,
         functools.partial(solver.solve_and_return_solution,
                           file_path=f"{gosnomer}imageToSave.png"))
+    captcha_text = await asyncio.wait_for(future, 60)
     py_logger.info(f"Получили решение {captcha_text} капчи возвращаем в основную задачу solve_captcha для {gosnomer}")
     return captcha_text
 
@@ -85,8 +78,8 @@ async def solve_captcha(session, url, vin_nomer, gosnomer):
             async with session.get(url) as resp:
                 answer = await resp.json()
         except Exception as e:
-            py_logger.info(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
-            continue
+            py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
+            return
         else:
             py_logger.info(f"У нас получилось! Приступаем к решению капчи с ответом {answer} {gosnomer}")
             token = answer['token']
@@ -97,33 +90,44 @@ async def solve_captcha(session, url, vin_nomer, gosnomer):
                     async with aiofiles.open(f"{gosnomer}imageToSave.png", "wb") as fh:
                         await fh.write(base64.urlsafe_b64decode(image))
                 except Exception as e:
-                    py_logger.info(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
+                    py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
                     continue
                 else:
-                    py_logger.info(f"У нас получилось! Далаем запрос через await к anticaptcha для решения капчи {gosnomer}")
+                    py_logger.info(
+                        f"У нас получилось! Далаем запрос через await к anticaptcha для решения капчи {gosnomer}")
                     captcha_text = await captcha_func(gosnomer)
                     if captcha_text:
-                        py_logger.info(f"Получили решение капчи в виде цифр, составляет тело запроса для гибдд {gosnomer}")
+                        py_logger.info(
+                            f"Получили решение капчи в виде цифр, составляет тело запроса для гибдд {gosnomer}")
                         data = {
                             "vin": vin_nomer,
                             "checkType": 'restricted',
                             "captchaWord": captcha_text,
                             "captchaToken": token
                         }
-                        try:
-                            py_logger.info(f"Пробуем сделать запрос гибдд для получения информации по автомобилю {gosnomer}")
-                            async with session.post(DIAGNOSTIC_URL, headers=HEADERS, data=data) as new_resp:
-                                while True:
-                                    new_answer = await new_resp.json()
-                                    if new_answer['code'] == 201:
-                                        py_logger.info(f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
+                        new_data = json.dumps(data)
+                        py_logger.info(
+                            f"Пробуем сделать запрос гибдд для получения информации по автомобилю {gosnomer}")
+
+                        new_url = f'https://xn--b1afk4ade.xn--90adear.xn--p1ai/proxy/check/auto/diagnostic?vin={vin_nomer}&checkType=restricted&captchaWord={captcha_text}&captchaToken={token}'
+                        async with session.post(new_url) as new_resp:
+                            while True:
+                                try:
+                                    new_answer = await asyncio.wait_for(new_resp.json(), 60)
+                                    if new_answer.get('status') != 200:
+                                        py_logger.info(
+                                            f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
                                         break
                                     else:
-                                        py_logger.info(f"Все ок! Вот ответ от гибдд: {new_resp.status} {new_answer} {gosnomer}")
+                                        py_logger.info(
+                                            f"Все ок! Вот ответ от гибдд: {new_resp.status} {new_answer} {gosnomer}")
                                         py_logger.info(f"Завершаем процедуру по данному автомобилю {gosnomer}")
                                         return
-                        except Exception as e:
-                            py_logger.info(f"Получили такой ответ от гибдд {e} для {gosnomer}. Повторяем запрос post для получения информации")
+                                except Exception as e:
+                                    py_logger.info(
+                                        f"Получили такой ответ от гибдд {e} для {gosnomer}. Повторяем запрос post для получения информации")
+                                    print(e.args[0])
+                                    return
 
 
 @async_timed()

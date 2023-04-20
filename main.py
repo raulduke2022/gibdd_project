@@ -110,13 +110,15 @@ async def solve_captcha(session, url, vin_nomer, gosnomer):
                             f"Пробуем сделать запрос гибдд для получения информации по автомобилю {gosnomer}")
 
                         new_url = f'https://xn--b1afk4ade.xn--90adear.xn--p1ai/proxy/check/auto/diagnostic?vin={vin_nomer}&checkType=restricted&captchaWord={captcha_text}&captchaToken={token}'
-                        async with session.post(new_url) as new_resp:
+                        async with session.post(DIAGNOSTIC_URL, data=data) as new_resp:
                             while True:
                                 try:
                                     new_answer = await asyncio.wait_for(new_resp.json(), 60)
                                     if new_answer.get('status') != 200:
-                                        py_logger.info(
-                                            f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
+                                        if new_answer.get('message') == 'Проверка CAPTCHA не была пройдена, поскольку не был передан ее код.':
+                                            continue
+                                        print(new_answer)
+                                        py_logger.info(f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
                                         break
                                     else:
                                         py_logger.info(
@@ -133,7 +135,8 @@ async def solve_captcha(session, url, vin_nomer, gosnomer):
 @async_timed()
 async def main():
     py_logger.info(f"Создаем aiohttp сессию")
-    async with aiohttp.ClientSession(headers=HEADERS) as session:
+    connector = aiohttp.TCPConnector(limit_per_host=1)
+    async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
         tasks = []
         for i in range(len(cars)):
             vin_nomer = cars[i]['VIN']

@@ -1,25 +1,35 @@
 import asyncio
-import aiohttp
-link = 'https://xn--b1afk4ade.xn--90adear.xn--p1ai/proxy/check/auto/diagnostic?vin=XW8AC2NH3MK139916&checkType=restricted&captchaWord=31233&captchaToken=BFTbvxe7S3vu6rccU/v/QA05MKcjGEwstsmXsKNYd30='
+import asyncpg
 
-HEADERS = {
-    "User-Agent": 'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Mobile Safari/537.36',
-    "Accept": "application/json"
-}
+some_date = (1, '1', bool(1), '1', '1', '1', '1', '1', '1', '1','1')
 
+statement = """INSERT INTO checks (car,
+                           check_date, 
+                           diagnosticcards, 
+                           dcexpirationdate, 
+                           pointaddress,
+                           chassis,
+                           body,
+                           operatorname,
+                           odometervalue,
+                           dcnumber,
+                           dcdate) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);"""
 
-async def get(session):
-    async with session.post(link) as resp:
-        return await resp.json()
+statement1 = "SELECT car_id FROM cars WHERE gosnomer = 'АХ05534'"
+print(statement1)
+async def query_product(pool):
+    async with pool.acquire() as connection:
+        return await connection.fetchrow(statement1)
 
 
 async def main():
-    connector = aiohttp.TCPConnector(limit_per_host=1)
-    async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
-        tasks = []
-        for i in range(5):
-           tasks.append(asyncio.create_task(get(session)))
-        result = await asyncio.gather(*tasks)
+    async with asyncpg.create_pool(host='127.0.0.1',
+                                   port=5432,
+                                   user='postgres',
+                                   password='kakacoarm',
+                                   database='postgres') as pool:
+        task = asyncio.create_task(query_product(pool))
+        result = await task
         print(result)
 
 

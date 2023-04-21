@@ -10,6 +10,28 @@ from util.async_timer import async_timed
 import requests
 import logging
 import json
+import asyncpg
+import os
+
+# _______________________DATABASE________________________
+
+statement = """INSERT INTO checks (car,
+                           check_date, 
+                           diagnosticcards, 
+                           dcexpirationdate, 
+                           pointaddress,
+                           chassis,
+                           body,
+                           operatorname,
+                           odometervalue,
+                           dcnumber,
+                           dcdate) VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);"""
+
+
+async def insert_check_info(pool, data):
+    async with pool.acquire() as connection:
+        await connection.execute(statement, data)
+
 
 # _______________________Logging______________________
 
@@ -47,9 +69,10 @@ HEADERS = {
     "Accept": "application/json"
 }
 
-py_logger.info(f"Открываем файл источник где автомобили")
-df = p.read_excel(io='cars_data/cars.xlsx')
-cars = df.to_dict('records')
+
+# py_logger.info(f"Открываем файл источник где автомобили")
+# df = p.read_excel(io='cars_data/cars.xlsx')
+# cars = df.to_dict('records')
 
 
 # ________________CAPTCHA FUNCTION____________________
@@ -71,81 +94,96 @@ async def captcha_func(gosnomer):
 
 
 @async_timed()
-async def solve_captcha(session, url, vin_nomer, gosnomer):
-    while True:
-        try:
-            py_logger.info(f"Пробуем получить капчу через обращение к гибдд {gosnomer}")
-            async with session.get(url) as resp:
-                answer = await resp.json()
-        except Exception as e:
-            py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
-            return
-        else:
-            py_logger.info(f"У нас получилось! Приступаем к решению капчи с ответом {answer} {gosnomer}")
-            token = answer['token']
-            image = answer['base64jpg']
-            while True:
-                try:
-                    py_logger.info(f"Пробуем создать изображение из капчи {gosnomer}")
-                    async with aiofiles.open(f"{gosnomer}imageToSave.png", "wb") as fh:
-                        await fh.write(base64.urlsafe_b64decode(image))
-                except Exception as e:
-                    py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
-                    continue
-                else:
+async def solve_captcha(session, pool, url, vin_nomer, gosnomer):
+    try:
+        py_logger.info(f"Пробуем получить капчу через обращение к гибдд {gosnomer}")
+        async with session.get(url) as resp:
+            answer = await resp.json()
+    except Exception as e:
+        py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
+        return
+    else:
+        py_logger.info(f"У нас получилось! Приступаем к решению капчи {gosnomer}")
+        token = answer['token']
+        image = answer['base64jpg']
+        while True:
+            try:
+                py_logger.info(f"Пробуем создать изображение из капчи {gosnomer}")
+                async with aiofiles.open(f"{gosnomer}imageToSave.png", "wb") as fh:
+                    await fh.write(base64.urlsafe_b64decode(image))
+            except Exception as e:
+                py_logger.error(f"Если не получилось, пробуем еще раз потому что была ошибка {e} {gosnomer}")
+                continue
+            else:
+                py_logger.info(
+                    f"У нас получилось! Далаем запрос через await к anticaptcha для решения капчи {gosnomer}")
+                captcha_text = await captcha_func(gosnomer)
+                if captcha_text:
                     py_logger.info(
-                        f"У нас получилось! Далаем запрос через await к anticaptcha для решения капчи {gosnomer}")
-                    captcha_text = await captcha_func(gosnomer)
-                    if captcha_text:
-                        py_logger.info(
-                            f"Получили решение капчи в виде цифр, составляет тело запроса для гибдд {gosnomer}")
-                        data = {
-                            "vin": vin_nomer,
-                            "checkType": 'restricted',
-                            "captchaWord": captcha_text,
-                            "captchaToken": token
-                        }
-                        new_data = json.dumps(data)
-                        py_logger.info(
-                            f"Пробуем сделать запрос гибдд для получения информации по автомобилю {gosnomer}")
+                        f"Получили решение капчи в виде цифр, составляет тело запроса для гибдд {gosnomer}")
+                    data = {
+                        "vin": vin_nomer,
+                        "checkType": 'restricted',
+                        "captchaWord": captcha_text,
+                        "captchaToken": token
+                    }
+                    new_data = json.dumps(data)
+                    py_logger.info(
+                        f"Пробуем сделать запрос гибдд для получения информации по автомобилю {gosnomer}")
 
-                        new_url = f'https://xn--b1afk4ade.xn--90adear.xn--p1ai/proxy/check/auto/diagnostic?vin={vin_nomer}&checkType=restricted&captchaWord={captcha_text}&captchaToken={token}'
-                        async with session.post(DIAGNOSTIC_URL, data=data) as new_resp:
-                            while True:
-                                try:
-                                    new_answer = await asyncio.wait_for(new_resp.json(), 60)
-                                    if new_answer.get('status') != 200:
-                                        if new_answer.get('message') == 'Проверка CAPTCHA не была пройдена, поскольку не был передан ее код.':
-                                            continue
-                                        print(new_answer)
-                                        py_logger.info(f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
-                                        break
-                                    else:
-                                        py_logger.info(
-                                            f"Все ок! Вот ответ от гибдд: {new_resp.status} {new_answer} {gosnomer}")
-                                        py_logger.info(f"Завершаем процедуру по данному автомобилю {gosnomer}")
-                                        return
-                                except Exception as e:
+                    new_url = f'https://xn--b1afk4ade.xn--90adear.xn--p1ai/proxy/check/auto/diagnostic?vin={vin_nomer}&checkType=restricted&captchaWord={captcha_text}&captchaToken={token}'
+                    async with session.post(DIAGNOSTIC_URL, data=data) as new_resp:
+                        while True:
+                            try:
+                                new_answer = await asyncio.wait_for(new_resp.json(), 60)
+                                if new_answer.get('status') != 200:
+                                    if new_answer.get(
+                                            'message') == 'Проверка CAPTCHA не была пройдена, поскольку не был передан ее код.':
+                                        continue
+                                    print(new_answer)
                                     py_logger.info(
-                                        f"Получили такой ответ от гибдд {e} для {gosnomer}. Повторяем запрос post для получения информации")
-                                    print(e.args[0])
-                                    return
+                                        f"Если ответ 201 значит неправильно решили, значит придется заново делать запрос к anticaptcha для решения капчи {gosnomer}")
+                                    break
+                                else:
+                                    os.remove(f"{gosnomer}imageToSave.png")
+                                    py_logger.info(
+                                        f"Все ок! Вот ответ от гибдд: {new_resp.status} {new_answer} {gosnomer}")
+                                    py_logger.info(f"Завершаем процедуру по данному автомобилю {gosnomer}")
+                                    car_id = await pool.fetchrow(f"SELECT car_id FROM cars WHERE gosnomer = '{gosnomer}'")['car_id']
+                                    return (car_id, '1', bool(1), '1', '1', '1', '1', '1', '1', '1', '1')
+                            except Exception as e:
+                                py_logger.info(
+                                    f"Получили такой ответ от гибдд {e} для {gosnomer}. Повторяем запрос post для получения информации")
+                                print(e.args[0])
+                                return
 
 
 @async_timed()
 async def main():
-    py_logger.info(f"Создаем aiohttp сессию")
+    async with asyncpg.create_pool(host='127.0.0.1',
+                                   port=5432,
+                                   user='postgres',
+                                   password='kakacoarm',
+                                   database='postgres') as pool:
+        cars = await pool.fetch('SELECT * FROM cars;')
+    py_logger.info(f"Начало процесса")
     connector = aiohttp.TCPConnector(limit_per_host=1)
     async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
         tasks = []
         for i in range(len(cars)):
-            vin_nomer = cars[i]['VIN']
-            gos_nomer = cars[i]['Гос номер']
-            url = URL_CAPTCHA
-            tasks.append(asyncio.create_task(solve_captcha(session, url, vin_nomer, gos_nomer)))
-
+            if i == 5:
+                break
+            vin = cars[i]['vin_nomer']
+            gos_nomer = cars[i]['gosnomer']
+            tasks.append(solve_captcha(session, pool, URL_CAPTCHA, vin, gos_nomer))
         py_logger.info(f"Создали задачи и ждем через команду asyncio.gather")
-        await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        tasks_insert = []
+        for data in results:
+            tasks_insert.append(insert_check_info(pool, *data))
+        await asyncio.gather(*tasks_insert)
+
+
 
 
 if __name__ == "__main__":

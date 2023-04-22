@@ -4,7 +4,7 @@ import pandas as pd
 import sys
 sys.path.append('/home/raulduke/Desktop/gibdd_project')
 
-from gibdd_parser.util.async_timer import async_timed
+from gibdd_project.util.async_timer import async_timed
 
 @async_timed()
 async def select_query(key):

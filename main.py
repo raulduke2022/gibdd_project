@@ -155,8 +155,6 @@ async def main():
         async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
             tasks = []
             for i in range(len(cars)):
-                if i == 1:
-                    break
                 vin = cars[i]['vin_nomer']
                 gos_nomer = cars[i]['gosnomer']
                 tasks.append(solve_captcha(session, pool, URL_CAPTCHA, vin, gos_nomer))

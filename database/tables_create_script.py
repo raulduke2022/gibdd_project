@@ -51,7 +51,7 @@ REFERENCES cars(car_id)
 #     return await connection.executemany(insert_brands, brands)
 
 async def main():
-    connection = await asyncpg.connect(host='127.0.0.1',
+    connection = await asyncpg.connect(host='localhost',
                                        port=5432,
                                        user='raulduke',
                                        database='cars',

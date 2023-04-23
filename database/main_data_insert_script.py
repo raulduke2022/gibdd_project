@@ -2,9 +2,9 @@ import asyncpg
 import asyncio
 import pandas as pd
 import sys
-sys.path.append('/home/raulduke/Desktop/gibdd_project')
+sys.path.append('/home/raulduke/gibdd/gibdd_project')
 
-from gibdd_project.util.async_timer import async_timed
+from util.async_timer import async_timed
 
 @async_timed()
 async def select_query(key):
@@ -34,7 +34,7 @@ async def insert_cars(connection, cars) -> int:
     return await connection.executemany(insert_cars, cars)
 @async_timed()
 async def main():
-    connection = await asyncpg.connect(host='127.0.0.1',
+    connection = await asyncpg.connect(host='localhost',
                                    port=5432,
                                    user='raulduke',
                                    password='kakacoarm',

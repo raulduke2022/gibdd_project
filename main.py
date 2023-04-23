@@ -76,7 +76,7 @@ async def solve_captcha(session, pool, url, vin_nomer, gosnomer):
                 answer = await resp.json()
         except Exception as e:
             py_logger.error(f"Ошибка при получении капчи от гибдд {e} {gosnomer}")
-            return
+            continue
         else:
             py_logger.info(f"Решаем капчу для {gosnomer}")
             token = answer['token']
@@ -144,7 +144,7 @@ async def solve_captcha(session, pool, url, vin_nomer, gosnomer):
 
 @async_timed()
 async def main():
-    async with asyncpg.create_pool(host='127.0.0.1',
+    async with asyncpg.create_pool(host='localhost',
                                    port=5432,
                                    user='raulduke',
                                    password='kakacoarm',

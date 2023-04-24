@@ -68,78 +68,80 @@ async def captcha_func(gosnomer):
 
 
 @async_timed()
-async def solve_captcha(session, pool, url, vin_nomer, gosnomer):
-    while True:
-        try:
-            py_logger.info(f"Получаем капчу от гибдд для {gosnomer}")
-            async with session.get(url, timeout=120) as resp:
-                answer = await resp.json()
-        except Exception as e:
-            py_logger.error(f"Ошибка при получении капчи от гибдд {e} {gosnomer}")
-            continue
-        else:
-            py_logger.info(f"Решаем капчу для {gosnomer}")
-            token = answer['token']
-            image = answer['base64jpg']
-            while True:
-                try:
-                    py_logger.info(f"Пробуем создать изображение из капчи {gosnomer}")
-                    async with aiofiles.open(f"{gosnomer}imageToSave.png", "wb") as fh:
-                        await fh.write(base64.urlsafe_b64decode(image))
-                except Exception as e:
-                    py_logger.error(f"Ошибка при создании изображении {e} для {gosnomer}")
-                    continue
-                else:
-                    while True:
-                        py_logger.info(
-                            f"Запрос к anticaptcha для {gosnomer}")
-                        captcha_text = await captcha_func(gosnomer)
-                        if captcha_text:
-                            data = {
-                                "vin": vin_nomer,
-                                "checkType": 'restricted',
-                                "captchaWord": captcha_text,
-                                "captchaToken": token
-                            }
+async def solve_captcha(session, sem, pool, url, vin_nomer, gosnomer):
+    async with sem:
+        while True:
+            try:
+                py_logger.info(f"Получаем капчу от гибдд для {gosnomer}")
+                async with session.get(url, timeout=120) as resp:
+                    answer = await resp.json()
+            except Exception as e:
+                py_logger.error(f"Ошибка при получении капчи от гибдд {e} {gosnomer}")
+                continue
+            else:
+                py_logger.info(f"Решаем капчу для {gosnomer}")
+                token = answer['token']
+                image = answer['base64jpg']
+                while True:
+                    try:
+                        py_logger.info(f"Пробуем создать изображение из капчи {gosnomer}")
+                        async with aiofiles.open(f"{gosnomer}imageToSave.png", "wb") as fh:
+                            await fh.write(base64.urlsafe_b64decode(image))
+                    except Exception as e:
+                        py_logger.error(f"Ошибка при создании изображении {e} для {gosnomer}")
+                        continue
+                    else:
+                        while True:
                             py_logger.info(
-                                f"Делаем финальный запрос в гибдд для {gosnomer}")
-                            async with session.post(DIAGNOSTIC_URL, data=data, timeout=120) as new_resp:
-                                while True:
-                                    try:
-                                        result = await new_resp.json()
-                                        if result.get('status') != 200:
-                                            if result.get('code') == 201:
-                                                py_logger.info(f"201 неправильное решение капчи для {gosnomer}")
-                                                break
+                                f"Запрос к anticaptcha для {gosnomer}")
+                            captcha_text = await captcha_func(gosnomer)
+                            if captcha_text:
+                                data = {
+                                    "vin": vin_nomer,
+                                    "checkType": 'restricted',
+                                    "captchaWord": captcha_text,
+                                    "captchaToken": token
+                                }
+                                py_logger.info(
+                                    f"Делаем финальный запрос в гибдд для {gosnomer}")
+                                async with session.post(DIAGNOSTIC_URL, data=data, timeout=120) as new_resp:
+                                    while True:
+                                        try:
+                                            result = await new_resp.json()
+                                            if result.get('status') != 200:
+                                                if result.get('code') == 201:
+                                                    py_logger.info(f"201 неправильное решение капчи для {gosnomer}")
+                                                    break
+                                                else:
+                                                    py_logger.info(f"{result} для {gosnomer}, возврат")
+                                                    return
                                             else:
-                                                py_logger.info(f"{result} для {gosnomer}, возврат")
-                                                return
-                                        else:
-                                            os.remove(f"{gosnomer}imageToSave.png")
+                                                os.remove(f"{gosnomer}imageToSave.png")
+                                                py_logger.info(
+                                                    f"Ответ гибдд записан в бд: {new_resp.status} {result} {gosnomer}")
+                                                car_id = await select_car(pool, gosnomer)
+                                                if car_id:
+                                                    diagnostic_result = \
+                                                    result.get('RequestResult').get('diagnosticCards')[
+                                                        0]
+                                                    insert_data = (car_id, result.get('requestTime'),
+                                                                   bool(diagnostic_result),
+                                                                   diagnostic_result.get('dcExpirationDate'),
+                                                                   diagnostic_result.get('pointAddress'),
+                                                                   diagnostic_result.get('chassis'),
+                                                                   diagnostic_result.get('body'),
+                                                                   diagnostic_result.get('operatorName'),
+                                                                   diagnostic_result.get('odometerValue'),
+                                                                   diagnostic_result.get('dcNumber'),
+                                                                   diagnostic_result.get('dcDate'))
+                                                    await asyncio.create_task(insert_check_info(pool, insert_data))
+                                                    return
+                                        except Exception as e:
                                             py_logger.info(
-                                                f"Ответ гибдд записан в бд: {new_resp.status} {result} {gosnomer}")
-                                            car_id = await select_car(pool, gosnomer)
-                                            if car_id:
-                                                diagnostic_result = result.get('RequestResult').get('diagnosticCards')[
-                                                    0]
-                                                insert_data = (car_id, result.get('requestTime'),
-                                                               bool(diagnostic_result),
-                                                               diagnostic_result.get('dcExpirationDate'),
-                                                               diagnostic_result.get('pointAddress'),
-                                                               diagnostic_result.get('chassis'),
-                                                               diagnostic_result.get('body'),
-                                                               diagnostic_result.get('operatorName'),
-                                                               diagnostic_result.get('odometerValue'),
-                                                               diagnostic_result.get('dcNumber'),
-                                                               diagnostic_result.get('dcDate'))
-                                                await asyncio.create_task(insert_check_info(pool, insert_data))
-                                                return
-                                    except Exception as e:
-                                        py_logger.info(
-                                            f"Ошибка при выполнении запрос к гибдд {e} для {gosnomer}")
-                                        return
-                        else:
-                            return
+                                                f"Ошибка при выполнении запрос к гибдд {e} для {gosnomer}")
+                                            return
+                            else:
+                                return
 
 
 @async_timed()
@@ -152,12 +154,13 @@ async def main():
         cars = await pool.fetch('SELECT * FROM cars;')
         py_logger.info(f"Начало процесса")
         connector = aiohttp.TCPConnector(limit_per_host=1)
+        sem = asyncio.Semaphore(1)
         async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
             tasks = []
             for i in range(len(cars)):
                 vin = cars[i]['vin_nomer']
                 gos_nomer = cars[i]['gosnomer']
-                tasks.append(solve_captcha(session, pool, URL_CAPTCHA, vin, gos_nomer))
+                tasks.append(solve_captcha(session, sem, pool, URL_CAPTCHA, vin, gos_nomer))
             py_logger.info(f"Создали задачи и ждем через команду asyncio.gather")
             await asyncio.gather(*tasks, return_exceptions=False)
 

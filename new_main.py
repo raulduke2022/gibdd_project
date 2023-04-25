@@ -151,10 +151,11 @@ async def main():
                                    user='raulduke',
                                    password='kakacoarm',
                                    database='cars') as pool:
-        cars = await pool.fetch('SELECT * FROM cars;')
+        cars = await pool.fetch('SELECT * FROM cars LEFT JOIN checks ON cars.car_id = checks.car WHERE check_id IS NULL')
+        print(cars)
         py_logger.info(f"Начало процесса")
         connector = aiohttp.TCPConnector(limit_per_host=1)
-        sem = asyncio.Semaphore(50)
+        sem = asyncio.Semaphore(5)
         async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
             tasks = []
             for i in range(len(cars)):

@@ -12,7 +12,7 @@ import os
 from database.sql_statements import insert_check_info, select_car
 
 # _______________________Logging______________________
-
+# фыафыа
 
 # получение пользовательского логгера и установка уровня логирования
 py_logger = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ async def main():
         cars = await pool.fetch('SELECT * FROM cars;')
         py_logger.info(f"Начало процесса")
         connector = aiohttp.TCPConnector(limit_per_host=1)
-        sem = asyncio.Semaphore(1)
+        sem = asyncio.Semaphore(10)
         async with aiohttp.ClientSession(headers=HEADERS, connector=connector) as session:
             tasks = []
             for i in range(len(cars)):
